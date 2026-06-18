@@ -1,0 +1,152 @@
+/*
+===============================================================================
+Clinical Analytics Pipeline - Phase 1: Database Setup, Ingestion, & Cleaning
+Tech Stack: T-SQL / SQL Server Management Studio (SSMS)
+Author: Michelle Asinobi
+===============================================================================
+*/
+
+-- 1. DATABASE INITIALIZATION
+USE master;
+GO
+IF EXISTS (SELECT * FROM sys.databases WHERE name = 'ClinicalAnalytics')
+BEGIN
+    ALTER DATABASE ClinicalAnalytics SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE ClinicalAnalytics;
+END
+GO
+CREATE DATABASE ClinicalAnalytics;
+GO
+USE ClinicalAnalytics;
+GO
+
+-- 2. SCHEMA DEFINITION (CORE TABLES)
+CREATE TABLE Patients (
+    Id VARCHAR(50) PRIMARY KEY,
+    BIRTHDATE DATE,
+    DEATHDATE DATE,
+    SSN VARCHAR(20),
+    DRIVERS VARCHAR(20),
+    PASSPORT VARCHAR(20),
+    PREFIX VARCHAR(20),
+    FIRST VARCHAR(100),
+    MIDDLE VARCHAR(100),
+    LAST VARCHAR(100),
+    SUFFIX VARCHAR(20),
+    MAIDEN VARCHAR(100),
+    MARITAL CHAR(1),
+    RACE VARCHAR(50),
+    ETHNICITY VARCHAR(50),
+    GENDER CHAR(1),
+    BIRTHPLACE VARCHAR(100),
+    ADDRESS VARCHAR(255),
+    CITY VARCHAR(100),
+    STATE VARCHAR(100),
+    COUNTY VARCHAR(100),
+    FIPS VARCHAR(20),
+    ZIP VARCHAR(20),
+    LAT DECIMAL(9,6),
+    LON DECIMAL(9,6),
+    HEALTHCARE_EXPENSES DECIMAL(12,2),
+    HEALTHCARE_COVERAGE DECIMAL(12,2),
+    INCOME DECIMAL(12,2)
+);
+
+CREATE TABLE Encounters (
+    Id VARCHAR(50) PRIMARY KEY,
+    START DATETIME2,
+    STOP DATETIME2,
+    PATIENT VARCHAR(50),
+    ORGANIZATION VARCHAR(50),
+    PROVIDER VARCHAR(50),
+    PAYER VARCHAR(50),
+    ENCOUNTERCLASS VARCHAR(50),
+    CODE VARCHAR(50),
+    DESCRIPTION VARCHAR(1000),
+    BASE_ENCOUNTER_COST DECIMAL(10,2),
+    TOTAL_CLAIM_COST DECIMAL(10,2),
+    PAYER_COVERAGE DECIMAL(10,2),
+    REASONCODE VARCHAR(50),
+    REASONDESCRIPTION VARCHAR(1000)
+);
+
+CREATE TABLE Conditions (
+    START DATE,
+    STOP DATE,
+    PATIENT VARCHAR(50),
+    ENCOUNTER VARCHAR(50),
+    CODE VARCHAR(50),
+    DESCRIPTION VARCHAR(1000)
+);
+
+CREATE TABLE Medications (
+    START DATETIME2,
+    STOP DATETIME2,
+    PATIENT VARCHAR(50),
+    ENCOUNTER VARCHAR(50),
+    CODE VARCHAR(50),
+    DESCRIPTION VARCHAR(1000),
+    BASE_COST DECIMAL(10,2),
+    PAYER_COVERAGE DECIMAL(10,2),
+    DISPENSES INT,
+    TOTALCOST DECIMAL(10,2),
+    REASONCODE VARCHAR(50),
+    REASONDESCRIPTION VARCHAR(1000)
+);
+GO
+
+-- 3. BULK INGESTION OPERATIONS
+BULK INSERT Patients
+FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\patients.csv'
+WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
+GO
+
+BULK INSERT Encounters
+FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\encounters.csv'
+WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
+GO
+
+BULK INSERT Conditions
+FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\conditions.csv'
+WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
+GO
+
+BULK INSERT Medications
+FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\medications.csv'
+WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
+GO
+
+-- 4. PIPELINE QUALITY CONTROL & DATA RECONCILIATION
+-- Shifting away from a resource-intensive loop to an optimized LEFT JOIN anti-join pattern to purge orphan tracking codes
+DELETE c
+FROM Conditions c
+LEFT JOIN Encounters e ON c.ENCOUNTER = e.Id
+WHERE e.Id IS NULL;
+GO
+
+DELETE m
+FROM Medications m
+LEFT JOIN Encounters e ON m.ENCOUNTER = e.Id
+WHERE e.Id IS NULL;
+GO
+
+-- 5. RELATIONAL INTEGRITY ENFORCEMENT (FOREIGN KEYS)
+ALTER TABLE Encounters 
+ADD CONSTRAINT FK_Encounters_Patients FOREIGN KEY (PATIENT) REFERENCES Patients(Id);
+GO
+
+ALTER TABLE Conditions 
+ADD CONSTRAINT FK_Conditions_Patients FOREIGN KEY (PATIENT) REFERENCES Patients(Id);
+GO
+
+ALTER TABLE Conditions 
+ADD CONSTRAINT FK_Conditions_Encounters FOREIGN KEY (ENCOUNTER) REFERENCES Encounters(Id);
+GO
+
+ALTER TABLE Medications 
+ADD CONSTRAINT FK_Medications_Patients FOREIGN KEY (PATIENT) REFERENCES Patients(Id);
+GO
+
+ALTER TABLE Medications 
+ADD CONSTRAINT FK_Medications_Encounters FOREIGN KEY (ENCOUNTER) REFERENCES Encounters(Id);
+GO
