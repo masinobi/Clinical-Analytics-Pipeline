@@ -1,13 +1,19 @@
 # Automated Clinical Quality & Patient Outcome Data Pipeline
 
 ## Project Objective
-Developed a comprehensive data analytics and workflow automation pipeline that ingests raw Electronic Health Record (EHR) transactions, models operational efficiency and patient safety metrics through a relational data layer, visualizes operational bottlenecks, and uses automated webhooks to deliver real-time AI care briefings for high-risk patient groups.
+An end-to-end clinical analytics build on **synthetic patient records generated with
+[Synthea](https://github.com/synthetichealth/synthea)**. Raw EHR extracts are loaded into SQL
+Server, modelled into operational-efficiency and patient-safety views, visualised in Power BI,
+and used as the basis for an event-driven alerting demo that produces care-team briefings for
+high-risk cohorts.
+
+> **No real patient data appears anywhere in this repository.** Every record is synthetic.
 
 ## Tech Stack & Ecosystem Architecture
 - **Data Ingestion & Extraction (ETL):** Synthea Engine, SQL Server (SSMS), Bulk Insert operations.
 - **Relational Modeling & Analytic Views:** T-SQL (Advanced CTEs, Window Functions `LEAD`, Conditional Aggregation `MAX(CASE)`).
 - **Business Intelligence:** Power BI Desktop (DirectQuery Model, Time-Series DAX Relationships).
-- **Workflow Automation & Intelligent Orchestration:** Zapier Pro, HTTP Webhooks, OpenAI API integration.
+- **Workflow Automation & Intelligent Orchestration:** Zapier Pro, HTTP Webhooks, OpenAI API. *The LLM step and channel routing live inside Zapier and are not part of this repository - see section 3.*
 
 ## Key Pipeline Deliverables & Engineering Milestones
 
@@ -22,10 +28,21 @@ Converted longitudinal transactional medical records into targeted business view
 - Established 1:N calendar dimensions to ensure robust time-series filtering across multiple EHR sources, preventing metric flattening.
   <img width="1802" height="1002" alt="image" src="https://github.com/user-attachments/assets/c716ef2a-f0a1-42be-be48-0f503825f610" />
   
-### 3. Event-Driven AI Automation (Zapier Pro & Python)
-- Developed a lightweight automation simulation script in **Python** using `urllib` to process complex nested JSON data structures.
-- Streamed live clinical payloads to a unique **Zapier Custom Webhook Endpoint** to simulate a modern connected Electronic Data Capture (EDC) system.
-- Authored a contextual **System Prompt** forcing an LLM agent to execute deterministic data synthesis—generating immediate 3-bullet care team briefings for high-risk cohorts automatically routed to stakeholder channels.
+### 3. Event-Driven Alerting Demo (Python -> Zapier -> LLM)
+
+Two halves, deliberately separated so it is clear what this repository contains and what
+is configured elsewhere.
+
+**In this repository** (`python/Zapier EHR.py`): a Python script that assembles a nested
+JSON clinical payload and POSTs it to a Zapier catch-hook endpoint using `urllib`. The
+payload is **generated for demonstration** - it mirrors the shape of a high-risk cohort
+record rather than being read from the SQL views above, so the script can be run without a
+database. The endpoint is read from the `ZAPIER_WEBHOOK_URL` environment variable.
+
+**Configured in Zapier, not in this repository:** the catch hook passes the payload to an
+OpenAI step driven by a system prompt I authored to force deterministic synthesis into a
+three-bullet care-team briefing, which is then routed to a stakeholder channel. The
+screenshots below show that output.
 <img width="1772" height="137" alt="image" src="https://github.com/user-attachments/assets/7a75a8c2-b450-453c-8a51-052f47a8939e" />
 
 <img width="16384" height="7603" alt="High-Risk Patient Alert - v2" src="https://github.com/user-attachments/assets/c372e433-1b6c-4992-915c-cf276676a464" />
