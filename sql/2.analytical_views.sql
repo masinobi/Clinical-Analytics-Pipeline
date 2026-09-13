@@ -33,7 +33,10 @@ SELECT
     NextAdmissionDate,
     NextClass,
     CASE 
-        WHEN DATEDIFF(day, DischargeDate, NextAdmissionDate) <= 30 THEN 'yes'
+        -- BETWEEN 0 AND 30, not <= 30. Synthea emits overlapping encounters, so the
+        -- next admission can precede the current discharge; DATEDIFF is then negative,
+        -- which also satisfies <= 30 and was being reported as a readmission.
+        WHEN DATEDIFF(day, DischargeDate, NextAdmissionDate) BETWEEN 0 AND 30 THEN 'yes'
         ELSE 'no'
     END AS Is_30_Day_Readmission
 FROM TrackedStays;
@@ -66,20 +69,39 @@ GO
 
 -- 3. LIVE EVENT INTELLIGENCE: REAL-TIME AUTOMATED COHORT ALERTS
 CREATE OR ALTER VIEW v_HighRiskCohortAlerts AS
-SELECT 
+-- Conditions and Encounters are aggregated to one row per patient BEFORE they meet
+-- Patients. Joining both to Patients in a single query multiplies rows: a patient with
+-- 2 conditions and 2 encounters yields 4, so COUNT(e.Id) reported 4 encounters where
+-- there were 2, and the >= 3 alert threshold fired on patients who never reached it.
+WITH ConditionFlags AS (
+    SELECT
+        PATIENT AS PatientId,
+        MAX(CASE WHEN CODE = '44054006' THEN 1 ELSE 0 END) AS HasDiabetes, -- SNOMED: Type 2 Diabetes
+        MAX(CASE WHEN CODE = '38341003' THEN 1 ELSE 0 END) AS HasHypertension -- SNOMED: Essential Hypertension
+    FROM Conditions
+    GROUP BY PATIENT
+),
+RecentEncounters AS (
+    SELECT
+        PATIENT AS PatientId,
+        COUNT(DISTINCT Id) AS Total30DayEncounters
+    FROM Encounters
+    WHERE [START] >= DATEADD(day, -30, GETDATE())
+    GROUP BY PATIENT
+)
+SELECT
     p.Id AS PatientID,
     p.FIRST + ' ' + p.LAST AS PatientName,
     DATEDIFF(year, p.BIRTHDATE, GETDATE()) AS CurrentAge,
-    MAX(CASE WHEN c.CODE = '44054006' THEN 1 ELSE 0 END) AS HasDiabetes, -- SNOMED: Type 2 Diabetes
-    MAX(CASE WHEN c.CODE = '38341003' THEN 1 ELSE 0 END) AS HasHypertension, -- SNOMED: Essential Hypertension
-    COUNT(e.Id) AS Total30DayEncounters
+    COALESCE(cf.HasDiabetes, 0) AS HasDiabetes,
+    COALESCE(cf.HasHypertension, 0) AS HasHypertension,
+    COALESCE(re.Total30DayEncounters, 0) AS Total30DayEncounters
 FROM Patients p
-INNER JOIN Conditions c ON p.Id = c.PATIENT
-INNER JOIN Encounters e ON p.Id = e.PATIENT
-WHERE e.START >= DATEADD(day, -30, GETDATE())
-GROUP BY p.Id, p.FIRST, p.LAST, p.BIRTHDATE
-HAVING 
-    (MAX(CASE WHEN c.CODE = '44054006' THEN 1 ELSE 0 END) = 1 
-     AND MAX(CASE WHEN c.CODE = '38341003' THEN 1 ELSE 0 END) = 1)
-    OR COUNT(e.Id) >= 3;
+-- LEFT, not INNER: the comorbidity branch below must still fire for a patient with no
+-- encounter inside the 30-day window. An INNER JOIN silently excluded that whole cohort.
+LEFT JOIN ConditionFlags cf ON p.Id = cf.PatientId
+LEFT JOIN RecentEncounters re ON p.Id = re.PatientId
+WHERE
+    (COALESCE(cf.HasDiabetes, 0) = 1 AND COALESCE(cf.HasHypertension, 0) = 1)
+    OR COALESCE(re.Total30DayEncounters, 0) >= 3;
 GO
