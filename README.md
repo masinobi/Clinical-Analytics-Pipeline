@@ -13,7 +13,7 @@ high-risk cohorts.
 - **Data Ingestion & Extraction (ETL):** Synthea Engine, SQL Server (SSMS), Bulk Insert operations.
 - **Relational Modeling & Analytic Views:** T-SQL (Advanced CTEs, Window Functions `LEAD`, Conditional Aggregation `MAX(CASE)`).
 - **Business Intelligence:** Power BI Desktop (DirectQuery Model, Time-Series DAX Relationships).
-- **Workflow Automation & Intelligent Orchestration:** Zapier Pro, HTTP Webhooks, OpenAI API. *The LLM step and channel routing live inside Zapier and are not part of this repository - see section 3.*
+- **Workflow Automation & Intelligent Orchestration:** Zapier Pro, HTTP Webhooks, Google Gemini API. *The LLM step and channel routing live inside Zapier and are not part of this repository - see section 3.*
 
 ## Key Pipeline Deliverables & Engineering Milestones
 
@@ -40,7 +40,7 @@ record rather than being read from the SQL views above, so the script can be run
 database. The endpoint is read from the `ZAPIER_WEBHOOK_URL` environment variable.
 
 **Configured in Zapier, not in this repository:** the catch hook passes the payload to an
-OpenAI step driven by a system prompt I authored to force deterministic synthesis into a
+Gemini step driven by a system prompt I authored to force deterministic synthesis into a
 three-bullet care-team briefing, which is then routed to a stakeholder channel. The
 screenshots below show that output.
 <img width="1772" height="137" alt="image" src="https://github.com/user-attachments/assets/7a75a8c2-b450-453c-8a51-052f47a8939e" />
