@@ -1,11 +1,15 @@
 import json
+import os
 import random
 from datetime import datetime, timezone
 import urllib.request
 import urllib.error
 
-# My Zapier Catch-Hook Endpoint
-WEBHOOK_URL = "https://hooks.zapier.com/hooks/catch/27402156/430dj8t/"
+# Zapier catch-hook endpoint. This is a write-capable URL - anyone holding it can post
+# into the workflow - so it is read from the environment rather than committed.
+#   PowerShell:  $env:ZAPIER_WEBHOOK_URL = "https://hooks.zapier.com/hooks/catch/<id>/<key>/"
+#   bash:        export ZAPIER_WEBHOOK_URL="https://hooks.zapier.com/hooks/catch/<id>/<key>/"
+WEBHOOK_URL = os.environ.get("ZAPIER_WEBHOOK_URL", "")
 
 def generate_mock_ehr_payload():
     """
@@ -92,6 +96,13 @@ def fire_webhook(url, payload):
         print(f"[-] Critical Network Error: Remote endpoint unreachable: {e.reason}")
 
 if __name__ == "__main__":
+    if not WEBHOOK_URL:
+        raise SystemExit(
+            "ZAPIER_WEBHOOK_URL is not set. Export your Zapier catch-hook URL first:\n"
+            '  PowerShell:  $env:ZAPIER_WEBHOOK_URL = "https://hooks.zapier.com/hooks/catch/<id>/<key>/"\n'
+            '  bash:        export ZAPIER_WEBHOOK_URL="https://hooks.zapier.com/hooks/catch/<id>/<key>/"'
+        )
+
     # 1. Construct the synthetic record
     mock_dataset = generate_mock_ehr_payload()
     
