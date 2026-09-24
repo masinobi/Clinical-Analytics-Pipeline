@@ -125,19 +125,28 @@ ConditionFlags AS (
     JOIN Ref_ConditionCodes r ON r.CODE = c.CODE
     GROUP BY c.PATIENT
 ),
+-- Utilisation counts UNPLANNED care only. Counting every encounter class, 267
+-- of the 290 utilisation alerts fired on patients attending routine wellness
+-- and ambulatory appointments - an alert that is wrong nine times in ten
+-- teaches the care team to ignore it. Emergency, inpatient and urgent care
+-- visits are the ones that signal a patient is not being managed.
 RecentEncounters AS (
     SELECT
         e.PATIENT AS PatientId,
-        COUNT(DISTINCT e.Id) AS Total30DayEncounters
+        COUNT(DISTINCT e.Id) AS Unplanned30DayEncounters
     FROM Encounters e
     CROSS JOIN AsOf a
     WHERE e.[START] >= DATEADD(day, -30, a.AsOfDate)
       AND e.[START] <  DATEADD(day, 1, a.AsOfDate)
+      AND e.ENCOUNTERCLASS IN ('emergency', 'inpatient', 'urgentcare')
     GROUP BY e.PATIENT
 )
+-- The alert carries the patient identifier, not the name. The briefing demo it
+-- is modelled for hands its payload to a third-party LLM, and that payload
+-- carries an ID and no name; the view now matches it. A name adds nothing a
+-- care team cannot look up from the ID in the EHR.
 SELECT
     p.Id AS PatientID,
-    p.FIRST + ' ' + p.LAST AS PatientName,
     a.AsOfDate,
     -- Whole years at the as-of date. DATEDIFF(year, ...) alone counts calendar
     -- year boundaries and overstates age by one before each birthday.
@@ -146,7 +155,7 @@ SELECT
              THEN 1 ELSE 0 END AS AgeAtAsOf,
     COALESCE(cf.HasDiabetes, 0) AS HasDiabetes,
     COALESCE(cf.HasHypertension, 0) AS HasHypertension,
-    COALESCE(re.Total30DayEncounters, 0) AS Total30DayEncounters
+    COALESCE(re.Unplanned30DayEncounters, 0) AS Unplanned30DayEncounters
 FROM Patients p
 CROSS JOIN AsOf a
 -- LEFT, not INNER: the comorbidity branch below must still fire for a patient with no
@@ -158,7 +167,7 @@ WHERE
     (p.DEATHDATE IS NULL OR p.DEATHDATE > a.AsOfDate)
     AND (
         (COALESCE(cf.HasDiabetes, 0) = 1 AND COALESCE(cf.HasHypertension, 0) = 1)
-        OR COALESCE(re.Total30DayEncounters, 0) >= 3
+        OR COALESCE(re.Unplanned30DayEncounters, 0) >= 3
     );
 GO
 
