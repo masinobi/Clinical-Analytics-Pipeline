@@ -4,6 +4,10 @@ Clinical Analytics Pipeline - Phase 1: Database Setup, Ingestion, & Cleaning
 Tech Stack: T-SQL / SQL Server Management Studio (SSMS)
 Author: Michelle Asinobi
 ===============================================================================
+
+This script rebuilds the database from scratch. Anything created in
+ClinicalAnalytics by hand - a view, a table, an index - is dropped by the next
+run, so every object the pipeline depends on has to live in this repository.
 */
 
 -- 1. DATABASE INITIALIZATION
@@ -21,6 +25,8 @@ USE ClinicalAnalytics;
 GO
 
 -- 2. SCHEMA DEFINITION (CORE TABLES)
+-- Column order matches the Synthea CSV headers exactly. BULK INSERT maps fields
+-- by position, not by name, so a table one column short does not load.
 CREATE TABLE Patients (
     Id VARCHAR(50) PRIMARY KEY,
     BIRTHDATE DATE,
@@ -70,19 +76,23 @@ CREATE TABLE Encounters (
     REASONDESCRIPTION VARCHAR(1000)
 );
 
+-- conditions.csv: START,STOP,PATIENT,ENCOUNTER,SYSTEM,CODE,DESCRIPTION
 CREATE TABLE Conditions (
     START DATE,
     STOP DATE,
     PATIENT VARCHAR(50),
     ENCOUNTER VARCHAR(50),
+    [SYSTEM] VARCHAR(100),     -- coding system URL; bracketed because SYSTEM is a keyword
     CODE VARCHAR(50),
     DESCRIPTION VARCHAR(1000)
 );
 
+-- medications.csv: START,STOP,PATIENT,PAYER,ENCOUNTER,CODE,DESCRIPTION,...
 CREATE TABLE Medications (
     START DATETIME2,
     STOP DATETIME2,
     PATIENT VARCHAR(50),
+    PAYER VARCHAR(50),
     ENCOUNTER VARCHAR(50),
     CODE VARCHAR(50),
     DESCRIPTION VARCHAR(1000),
@@ -96,57 +106,85 @@ CREATE TABLE Medications (
 GO
 
 -- 3. BULK INGESTION OPERATIONS
-BULK INSERT Patients
-FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\patients.csv'
-WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
+-- Set @CsvPath to the folder holding Synthea's CSV output. It is the only
+-- machine-specific value in the pipeline. BULK INSERT will not take a variable
+-- as its file name, so the statements are assembled and executed together.
+DECLARE @CsvPath NVARCHAR(400) = N'C:\Synthea\output\csv';
+
+DECLARE @Options NVARCHAR(400) =
+    N' WITH (FIRSTROW = 2, FORMAT = ''CSV'', FIELDQUOTE = ''"'', ROWTERMINATOR = ''0x0a'', CODEPAGE = ''65001'', TABLOCK);';
+
+DECLARE @Load NVARCHAR(MAX) =
+      N'BULK INSERT Patients    FROM ''' + @CsvPath + N'\patients.csv'''    + @Options
+    + N'BULK INSERT Encounters  FROM ''' + @CsvPath + N'\encounters.csv'''  + @Options
+    + N'BULK INSERT Conditions  FROM ''' + @CsvPath + N'\conditions.csv'''  + @Options
+    + N'BULK INSERT Medications FROM ''' + @CsvPath + N'\medications.csv''' + @Options;
+
+EXEC sp_executesql @Load;
 GO
 
-BULK INSERT Encounters
-FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\encounters.csv'
-WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
-GO
-
-BULK INSERT Conditions
-FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\conditions.csv'
-WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
-GO
-
-BULK INSERT Medications
-FROM 'C:\Users\hernn\OneDrive\Documents\Synthea\output\csv\medications.csv'
-WITH (FIRSTROW = 2, FORMAT = 'CSV', FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '"', TABLOCK);
-GO
-
--- 4. PIPELINE QUALITY CONTROL & DATA RECONCILIATION
--- Shifting away from a resource-intensive loop to an optimized LEFT JOIN anti-join pattern to purge orphan tracking codes
-DELETE c
+-- 4. PIPELINE QUALITY CONTROL: QUARANTINE, NOT DELETE
+-- Rows that reference an encounter missing from the extract are moved to a
+-- quarantine table with a reason and a timestamp before they are removed from
+-- the analytic tables. Received clinical data is not discarded silently: ALCOA+
+-- requires the original record to stay intact and attributable, and a bare
+-- DELETE leaves no trace of what was removed or why.
+SELECT c.*,
+       CAST('Condition references an encounter not in the extract' AS VARCHAR(200)) AS QuarantineReason,
+       SYSUTCDATETIME() AS QuarantinedAt
+INTO Quarantine_Conditions
 FROM Conditions c
-LEFT JOIN Encounters e ON c.ENCOUNTER = e.Id
-WHERE e.Id IS NULL;
+WHERE NOT EXISTS (SELECT 1 FROM Encounters e WHERE e.Id = c.ENCOUNTER);
+
+DELETE c FROM Conditions c
+WHERE NOT EXISTS (SELECT 1 FROM Encounters e WHERE e.Id = c.ENCOUNTER);
 GO
 
-DELETE m
+SELECT m.*,
+       CAST('Medication references an encounter not in the extract' AS VARCHAR(200)) AS QuarantineReason,
+       SYSUTCDATETIME() AS QuarantinedAt
+INTO Quarantine_Medications
 FROM Medications m
-LEFT JOIN Encounters e ON m.ENCOUNTER = e.Id
-WHERE e.Id IS NULL;
+WHERE NOT EXISTS (SELECT 1 FROM Encounters e WHERE e.Id = m.ENCOUNTER);
+
+DELETE m FROM Medications m
+WHERE NOT EXISTS (SELECT 1 FROM Encounters e WHERE e.Id = m.ENCOUNTER);
 GO
 
 -- 5. RELATIONAL INTEGRITY ENFORCEMENT (FOREIGN KEYS)
-ALTER TABLE Encounters 
+ALTER TABLE Encounters
 ADD CONSTRAINT FK_Encounters_Patients FOREIGN KEY (PATIENT) REFERENCES Patients(Id);
 GO
 
-ALTER TABLE Conditions 
+ALTER TABLE Conditions
 ADD CONSTRAINT FK_Conditions_Patients FOREIGN KEY (PATIENT) REFERENCES Patients(Id);
 GO
 
-ALTER TABLE Conditions 
+ALTER TABLE Conditions
 ADD CONSTRAINT FK_Conditions_Encounters FOREIGN KEY (ENCOUNTER) REFERENCES Encounters(Id);
 GO
 
-ALTER TABLE Medications 
+ALTER TABLE Medications
 ADD CONSTRAINT FK_Medications_Patients FOREIGN KEY (PATIENT) REFERENCES Patients(Id);
 GO
 
-ALTER TABLE Medications 
+ALTER TABLE Medications
 ADD CONSTRAINT FK_Medications_Encounters FOREIGN KEY (ENCOUNTER) REFERENCES Encounters(Id);
+GO
+
+-- 6. LOAD RECONCILIATION
+-- A load that silently fails leaves an empty table and a pipeline that still
+-- runs, which is what happened to Conditions and Medications before their
+-- column lists matched the CSVs. Nothing downstream errors; every view that
+-- depends on them just returns nothing. Check these counts after every run.
+--
+-- Expected on the 11,482-patient Synthea extract:
+--   Patients 11,482 | Encounters 678,233 | Conditions 420,855 | Medications 591,811
+--   Quarantine_Conditions 0 | Quarantine_Medications 0
+SELECT 'Patients' AS TableName, COUNT(*) AS LoadedRows FROM Patients
+UNION ALL SELECT 'Encounters',             COUNT(*) FROM Encounters
+UNION ALL SELECT 'Conditions',             COUNT(*) FROM Conditions
+UNION ALL SELECT 'Medications',            COUNT(*) FROM Medications
+UNION ALL SELECT 'Quarantine_Conditions',  COUNT(*) FROM Quarantine_Conditions
+UNION ALL SELECT 'Quarantine_Medications', COUNT(*) FROM Quarantine_Medications;
 GO
